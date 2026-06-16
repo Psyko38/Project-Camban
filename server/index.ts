@@ -75,3 +75,12 @@ process.on("SIGTERM", () => {
     process.exit(0);
   });
 });
+
+// alwaysdata uses SIGHUP for hot restart
+process.on("SIGHUP", () => {
+  console.log("Restarting...");
+  server.close(() => {
+    closeDb();
+    process.exit(0);
+  });
+});

@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { getDb } from "../db.js";
-import type { AppStore, Project, AppState, Story, Sprint, Member } from "../../src/types.js";
+import type { AppStore, Project, AppState, Story, Sprint, Member } from "@src/types.js";
 
 const router = Router();
 

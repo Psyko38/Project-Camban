@@ -100,3 +100,62 @@ export const ROLE_LABELS: Record<Member["role"], string> = {
   tester: "Testeur",
   designer: "Designer",
 };
+
+// ── AI Generated Types ────────────────────────────────────────────────
+
+export interface AcceptanceCriteriaItem {
+  given: string;
+  when: string;
+  then: string;
+  priority: "must" | "should" | "could";
+}
+
+export interface AcceptanceCriteria {
+  criteria: AcceptanceCriteriaItem[];
+  testSuggestions: string[];
+}
+
+export interface RetrospectiveAction {
+  action: string;
+  owner?: string;
+  deadline?: string;
+}
+
+export interface RetrospectiveMetric {
+  label: string;
+  value: string;
+  trend: "improving" | "stable" | "declining";
+}
+
+export interface Retrospective {
+  keepDoing: string[];
+  startDoing: string[];
+  stopDoing: string[];
+  actions: RetrospectiveAction[];
+  metrics: RetrospectiveMetric[];
+}
+
+export interface StoryReviewIssue {
+  severity: "critical" | "warning" | "info";
+  message: string;
+  suggestion: string;
+}
+
+export interface StoryReview {
+  score: number;
+  issues: StoryReviewIssue[];
+  improvedStory: {
+    title: string;
+    description: string;
+    points: number;
+    priority: string;
+  };
+}
+
+export interface Estimation {
+  recommendedPoints: number;
+  minPoints: number;
+  maxPoints: number;
+  reasoning: string;
+  factors: { factor: string; impact: "low" | "medium" | "high" }[];
+}

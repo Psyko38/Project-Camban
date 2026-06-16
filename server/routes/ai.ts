@@ -4,6 +4,7 @@ import { getDb } from "../db.js";
 const router = Router();
 
 const DEFAULT_BASE_URL = "https://api.openai.com/v1";
+const REQUEST_TIMEOUT_MS = 60_000;
 
 interface AiConfig {
   apiKey: string;
@@ -35,6 +36,92 @@ function saveAiConfig(config: Partial<AiConfig>): void {
   if (config.reasoningEffort !== undefined) upsert.run("reasoning_effort", config.reasoningEffort || "");
 }
 
+// ── Reasoning helpers ──────────────────────────────────────────────────
+
+type Provider = "openai" | "groq" | "deepseek" | "xai" | "openrouter" | "anthropic" | "ollama" | "lmstudio" | "together" | "unknown";
+
+function detectProvider(baseUrl: string): Provider {
+  const url = baseUrl.toLowerCase();
+  if (url.includes("api.openai.com"))      return "openai";
+  if (url.includes("api.groq.com"))        return "groq";
+  if (url.includes("api.deepseek.com"))    return "deepseek";
+  if (url.includes("api.x.ai"))            return "xai";
+  if (url.includes("openrouter.ai"))       return "openrouter";
+  if (url.includes("api.anthropic.com"))   return "anthropic";
+  if (url.includes("localhost:11434"))      return "ollama";
+  if (url.includes("localhost:1234"))       return "lmstudio";
+  if (url.includes("api.together.xyz"))     return "together";
+  return "unknown";
+}
+
+function isReasoningModel(model: string): boolean {
+  const m = model.toLowerCase().replace(/^[^/]+\//, "");
+  return /\bo[134]\b/.test(m)
+    || /\bgpt-5\b/.test(m)
+    || /\bgpt-oss\b/.test(m)
+    || /\bdeepseek\b/.test(m)
+    || /\bgrok\b/.test(m)
+    || /\bclaude\b/.test(m);
+}
+
+function buildReasoningBody(
+  provider: Provider,
+  model: string,
+  effort: string | null,
+  baseBody: Record<string, any>,
+): Record<string, any> {
+  if (!effort || !isReasoningModel(model)) return baseBody;
+
+  switch (provider) {
+    case "openai":
+      return { ...baseBody, reasoning: { effort } };
+
+    case "groq": {
+      const isQwen = /qwen/i.test(model);
+      const groqEffort = isQwen
+        ? (effort === "off" ? "none" : "default")
+        : effort;
+      return { ...baseBody, reasoning_effort: groqEffort };
+    }
+
+    case "deepseek": {
+      const dsEffort = effort === "high" || effort === "max" ? effort : "high";
+      return { ...baseBody, reasoning_effort: dsEffort, thinking: { type: "enabled" } };
+    }
+
+    case "xai":
+      return { ...baseBody, reasoning_effort: effort };
+
+    case "openrouter":
+      return { ...baseBody, reasoning_effort: effort };
+
+    case "anthropic":
+      return { ...baseBody, thinking: { type: "adaptive", effort } };
+
+    case "ollama":
+    case "lmstudio":
+    case "together":
+    default:
+      return baseBody;
+  }
+}
+
+// ── Fetch with timeout ─────────────────────────────────────────────────
+
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // GET /api/ai/config — never expose the real API key
 router.get("/config", (_req, res) => {
   const config = getAiConfig();
@@ -47,7 +134,7 @@ router.get("/config", (_req, res) => {
 });
 
 // PUT /api/ai/config
-router.put("/config", (req, res) => {
+router.put("/config", async (req, res) => {
   const { apiKey, apiBaseUrl, model, reasoningEffort } = req.body;
   if (apiKey !== undefined) {
     if (typeof apiKey !== "string" || apiKey.length < 4) {
@@ -59,7 +146,6 @@ router.put("/config", (req, res) => {
     if (typeof apiBaseUrl !== "string" || !apiBaseUrl.startsWith("http")) {
       return res.status(400).json({ error: "URL invalide" });
     }
-    // Normalize: remove trailing slash
     saveAiConfig({ apiBaseUrl: apiBaseUrl.replace(/\/+$/, "") });
   }
   if (model !== undefined) {
@@ -69,11 +155,30 @@ router.put("/config", (req, res) => {
     saveAiConfig({ model });
   }
   if (reasoningEffort !== undefined) {
-    if (reasoningEffort !== null && reasoningEffort !== "" && !["low", "medium", "high"].includes(reasoningEffort)) {
-      return res.status(400).json({ error: "Niveau de réflexion invalide (low, medium, high, ou null)" });
+    const validEfforts = ["none", "low", "medium", "high", "max", "xhigh"];
+    if (reasoningEffort !== null && reasoningEffort !== "" && !validEfforts.includes(reasoningEffort)) {
+      return res.status(400).json({ error: `Niveau de réflexion invalide (${validEfforts.join(", ")}, ou null)` });
     }
     saveAiConfig({ reasoningEffort: reasoningEffort || null });
   }
+
+  // Validate API key by testing a models fetch
+  const config = getAiConfig();
+  if (config.apiKey && config.apiBaseUrl) {
+    try {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      headers["Authorization"] = `Bearer ${config.apiKey}`;
+      const testResp = await fetchWithTimeout(`${config.apiBaseUrl}/models`, { method: "GET", headers }, 10_000);
+      if (!testResp.ok) {
+        const err = await testResp.json().catch(() => ({}));
+        const msg = err?.error?.message || `Erreur ${testResp.status}`;
+        return res.status(400).json({ error: `Clé API invalide : ${msg}` });
+      }
+    } catch {
+      // Timeout or network error — don't block save, just warn
+    }
+  }
+
   res.json({ ok: true });
 });
 
@@ -90,7 +195,7 @@ router.get("/models", async (_req, res) => {
       headers["Authorization"] = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetch(`${config.apiBaseUrl}/models`, { method: "GET", headers });
+    const response = await fetchWithTimeout(`${config.apiBaseUrl}/models`, { method: "GET", headers });
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -100,8 +205,6 @@ router.get("/models", async (_req, res) => {
 
     const data = await response.json() as any;
 
-    // OpenAI format: { data: [{ id: "model-name", ... }] }
-    // Some providers return { models: [...] } or a plain array
     let models: { id: string; name?: string }[] = [];
 
     if (Array.isArray(data)) {
@@ -112,7 +215,6 @@ router.get("/models", async (_req, res) => {
       models = data.models.map((m: any) => ({ id: m.id || m.name || m, name: m.name || m.id || m }));
     }
 
-    // Sort alphabetically
     models.sort((a, b) => a.id.localeCompare(b.id));
 
     res.json({ models });
@@ -140,6 +242,18 @@ router.post("/generate", async (req, res) => {
     return res.status(400).json({ error: "Aucun modèle sélectionné" });
   }
 
+  const provider = detectProvider(config.apiBaseUrl);
+
+  const baseBody: Record<string, any> = {
+    model,
+    messages,
+    temperature: 0.7,
+    max_tokens: 4000,
+  };
+
+  const requestBody = buildReasoningBody(provider, model, config.reasoningEffort, baseBody);
+  const useReasoning = requestBody !== baseBody;
+
   try {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -148,27 +262,36 @@ router.post("/generate", async (req, res) => {
       headers["Authorization"] = `Bearer ${config.apiKey}`;
     }
 
-    const response = await fetch(`${config.apiBaseUrl}/chat/completions`, {
+    let response = await fetchWithTimeout(`${config.apiBaseUrl}/chat/completions`, {
       method: "POST",
       headers,
-      body: JSON.stringify({
-        model,
-        ...(config.reasoningEffort ? { reasoning: { effort: config.reasoningEffort } } : {}),
-        messages: [
-          {
-            role: "system",
-            content: `Tu es un assistant Scrum expert. Tu génères des données de projet Scrum au format JSON.
-Réponds TOUJOURS avec un objet JSON valide, sans texte avant ou après.
-Ne utilise pas de blocs de code markdown (pas de \`\`\`json).
-Les champs requis sont stricts : n'ajoute pas de champs supplémentaires.
-Utilise des IDs au format "ai-{type}-{timestamp}-{index}" (ex: ai-story-1718000000-0).`,
-          },
-          ...messages,
-        ],
-        temperature: 0.7,
-        max_tokens: 4000,
-      }),
+      body: JSON.stringify(requestBody),
     });
+
+    // Fallback: if reasoning is unsupported, retry without it
+    if (!response.ok && useReasoning) {
+      const errBody = await response.json().catch(() => ({}));
+      const errMsg = errBody?.error?.message || "";
+      if (errMsg.includes("reasoning") || errMsg.includes("unsupported") || errMsg.includes("thinking")) {
+        console.log("Reasoning unsupported, retrying without it...");
+        response = await fetchWithTimeout(`${config.apiBaseUrl}/chat/completions`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(baseBody),
+        });
+      }
+    }
+
+    // Retry once on transient errors (429, 500, 502, 503)
+    if (!response.ok && [429, 500, 502, 503].includes(response.status)) {
+      console.log(`Transient error ${response.status}, retrying once...`);
+      await new Promise((r) => setTimeout(r, 1000));
+      response = await fetchWithTimeout(`${config.apiBaseUrl}/chat/completions`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+      });
+    }
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -186,6 +309,9 @@ Utilise des IDs au format "ai-{type}-{timestamp}-{index}" (ex: ai-story-17180000
     res.json({ content, model });
   } catch (err: any) {
     console.error("AI generation error:", err);
+    if (err.name === "AbortError") {
+      return res.status(504).json({ error: "Délai d'attente dépassé (60s)" });
+    }
     res.status(500).json({ error: err.message || "Erreur interne" });
   }
 });

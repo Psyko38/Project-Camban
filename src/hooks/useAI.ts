@@ -1,19 +1,15 @@
 import { useState, useCallback } from "react";
 import { aiApi } from "../api/client";
-import type { Story, Sprint, Member, AppState } from "../types";
+import type { Story, Sprint, Member, AppState, AcceptanceCriteria, Retrospective, StoryReview, Estimation } from "../types";
 
 const now = () => new Date().toISOString().split("T")[0];
-const uid = (type: string, i = 0) => `ai-${type}-${Date.now()}-${i}`;
 
 function parseJsonResponse<T>(content: string): T {
   let cleaned = content.trim();
-  // Remove any markdown code fences (json, html, text, or empty)
   cleaned = cleaned.replace(/^```\w*\s*/i, "").replace(/\s*```$/i, "");
 
-  // 1. Try direct parse
   try { return JSON.parse(cleaned) as T; } catch {}
 
-  // 2. Extract by brace matching
   for (let i = 0; i < cleaned.length; i++) {
     if (cleaned[i] === "{" || cleaned[i] === "[") {
       const open = cleaned[i];
@@ -52,7 +48,8 @@ Utilise les formats de date "YYYY-MM-DD".
 Les story points utilisent la séquence: 1, 2, 3, 5, 8, 13, 21.`;
 }
 
-// ── Build project context from AppState ──────────────────────────────────
+// ── Build project context from AppState (truncated for large projects) ──
+
 const ROLE_LABELS: Record<string, string> = {
   po: "Product Owner",
   sm: "Scrum Master",
@@ -61,13 +58,7 @@ const ROLE_LABELS: Record<string, string> = {
   designer: "Designer",
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  backlog: "BACKLOG",
-  "todo": "À FAIRE",
-  "in-progress": "EN COURS",
-  review: "EN REVUE",
-  done: "TERMINÉ",
-};
+const PRIORITY_WEIGHT: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
 function buildProjectContext(state: AppState, projectName?: string): string {
   const lines: string[] = [];
@@ -127,23 +118,33 @@ function buildProjectContext(state: AppState, projectName?: string): string {
     }
   }
 
-  // ── BACKLOG (stories sans sprint) ──
-  const backlogStories = state.stories.filter((st) => !st.sprintId);
+  // ── BACKLOG (stories sans sprint) — top 20 by priority ──
+  const backlogStories = state.stories
+    .filter((st) => !st.sprintId)
+    .sort((a, b) => (PRIORITY_WEIGHT[b.priority] || 0) - (PRIORITY_WEIGHT[a.priority] || 0));
+
   if (backlogStories.length > 0) {
     const backlogPoints = backlogStories.reduce((sum, st) => sum + st.points, 0);
+    const shown = backlogStories.slice(0, 20);
     lines.push(`\n=== BACKLOG (${backlogStories.length} stories, ${backlogPoints}pts) ===`);
-    for (const st of backlogStories) {
+    for (const st of shown) {
       lines.push(`  [${st.id}] ${st.title} (${st.points}pts, priorité: ${st.priority})`);
+    }
+    if (backlogStories.length > 20) {
+      lines.push(`  ... et ${backlogStories.length - 20} autres stories`);
     }
   } else if (state.stories.length === 0) {
     lines.push(`\n=== BACKLOG ===`);
     lines.push(`  (vide - aucune story)`);
   }
 
-  // ── HISTORIQUE (sprints terminés) ──
-  const completedSprints = state.sprints.filter((s) => s.status === "completed");
+  // ── HISTORIQUE (5 derniers sprints terminés) ──
+  const completedSprints = state.sprints
+    .filter((s) => s.status === "completed")
+    .slice(-5);
+
   if (completedSprints.length > 0) {
-    lines.push(`\n=== HISTORIQUE (${completedSprints.length} sprints terminés) ===`);
+    lines.push(`\n=== HISTORIQUE (${completedSprints.length} derniers sprints terminés) ===`);
     for (const s of completedSprints) {
       const sprintStories = state.stories.filter((st) => s.storyIds.includes(st.id));
       const doneStories = sprintStories.filter((st) => st.status === "done");
@@ -220,8 +221,7 @@ Règles :
         },
       ]);
 
-      const parsed = parseJsonResponse<GeneratedProject>(resp.content);
-      return parsed;
+      return parseJsonResponse<GeneratedProject>(resp.content);
     } catch (err: any) {
       setError(err.message || "Erreur de génération");
       return null;
@@ -347,8 +347,7 @@ Règles :
         },
       ]);
 
-      const parsed = parseJsonResponse<GeneratedSprint>(resp.content);
-      return parsed;
+      return parseJsonResponse<GeneratedSprint>(resp.content);
     } catch (err: any) {
       setError(err.message || "Erreur de génération");
       return null;
@@ -412,8 +411,303 @@ Règles :
         },
       ]);
 
-      const parsed = parseJsonResponse<CompletedStory>(resp.content);
-      return parsed;
+      return parseJsonResponse<CompletedStory>(resp.content);
+    } catch (err: any) {
+      setError(err.message || "Erreur de génération");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { generate, loading, error };
+}
+
+// ── Decompose a large story into smaller ones ───────────────────────────
+export function useDecomposeStory() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useCallback(async (story: Story, state: AppState): Promise<GeneratedStory[] | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const projectContext = buildProjectContext(state);
+
+      const resp = await aiApi.generate([
+        { role: "system", content: systemPrompt("Tu décomposes des user stories en sous-stories plus petites.") },
+        {
+          role: "user",
+          content: `${projectContext}
+
+Story à décomposer :
+Titre : ${story.title}
+Description : ${story.description}
+Points : ${story.points}pts
+Priorité : ${story.priority}
+
+Décompose cette story en sous-stories plus petites et indépendantes.
+Réponds avec un JSON de cette forme exacte :
+[
+  { "title": "En tant que... je veux... afin de...", "description": "Description détaillée", "priority": "low|medium|high|critical", "points": 1|2|3|5 }
+]
+
+Règles :
+- Chaque sous-story doit faire entre 1 et 5 points
+- Les sous-stories doivent couvrir TOUTE la story originale
+- Respecter le format "En tant que... je veux... afin de..."
+- Les sous-stories doivent être indépendantes autant que possible
+- Total des points des sous-stories ≈ points de la story originale
+- Priorités cohérentes avec la story originale`,
+        },
+      ]);
+
+      const parsed = parseJsonResponse<GeneratedStory[]>(resp.content);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (err: any) {
+      setError(err.message || "Erreur de génération");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { generate, loading, error };
+}
+
+// ── Generate acceptance criteria ────────────────────────────────────────
+export function useGenerateAcceptanceCriteria() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useCallback(async (story: Story, state: AppState): Promise<AcceptanceCriteria | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const projectContext = buildProjectContext(state);
+
+      const resp = await aiApi.generate([
+        { role: "system", content: systemPrompt("Tu génères des critères d'acceptation au format Given/When/Then.") },
+        {
+          role: "user",
+          content: `${projectContext}
+
+Story :
+Titre : ${story.title}
+Description : ${story.description}
+Points : ${story.points}pts
+
+Génère des critères d'acceptation détaillés et testables pour cette story.
+Réponds avec un JSON de cette forme exacte :
+{
+  "criteria": [
+    { "given": "ETANT DONNE ...", "when": "QUAND ...", "then": "ALORS ...", "priority": "must|should|could" }
+  ],
+  "testSuggestions": [
+    "Suggestion de test 1",
+    "Suggestion de test 2"
+  ]
+}
+
+Règles :
+- Minimum 3 critères d'acceptation
+- Format GIVEN/WHEN/THEN (ETANT DONNE/QUAND/ALORS) en français
+- Chaque critère doit être testable et spécifique
+- Priority : must (bloquant), should (important), could (nice-to-have)
+- Inclure des suggestions de tests unitaires ou d'intégration
+- Couvrir les cas nominal, d'erreur et limites`,
+        },
+      ]);
+
+      return parseJsonResponse<AcceptanceCriteria>(resp.content);
+    } catch (err: any) {
+      setError(err.message || "Erreur de génération");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { generate, loading, error };
+}
+
+// ── Generate retrospective ─────────────────────────────────────────────
+export function useGenerateRetrospective() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useCallback(async (sprint: Sprint, state: AppState): Promise<Retrospective | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const sprintStories = state.stories.filter((st) => sprint.storyIds.includes(st.id));
+      const doneStories = sprintStories.filter((st) => st.status === "done");
+      const totalPoints = sprintStories.reduce((sum, st) => sum + st.points, 0);
+      const donePoints = doneStories.reduce((sum, st) => sum + st.points, 0);
+
+      const completedSprints = state.sprints.filter((s) => s.status === "completed" && s.id !== sprint.id);
+      const velocityHistory = completedSprints.map((s) => {
+        const stories = state.stories.filter((st) => s.storyIds.includes(st.id));
+        const done = stories.filter((st) => st.status === "done");
+        return done.reduce((sum, st) => sum + st.points, 0);
+      });
+
+      const resp = await aiApi.generate([
+        { role: "system", content: systemPrompt("Tu génères des rétrospectives d'équipe Scrum.") },
+        {
+          role: "user",
+          content: `Rétrospective pour le sprint :
+Sprint : ${sprint.name} — "${sprint.goal}"
+Période : ${sprint.startDate} → ${sprint.endDate}
+Stories réalisées : ${doneStories.length}/${sprintStories.length} (${donePoints}/${totalPoints}pts)
+Vélocité(s) précédente(s) : ${velocityHistory.length > 0 ? velocityHistory.join(", ") : "Aucune"}
+Équipe : ${state.members.map((m) => `${m.name} (${m.role})`).join(", ")}
+
+Stories terminées :
+${doneStories.map((st) => `- ${st.title} (${st.points}pts)`).join("\n") || "Aucune"}
+
+Stories non terminées :
+${sprintStories.filter((st) => st.status !== "done").map((st) => `- ${st.title} (${st.points}pts, ${st.status})`).join("\n") || "Aucune"}
+
+Génère une rétrospective complète.
+Réponds avec un JSON de cette forme exacte :
+{
+  "keepDoing": ["Ce qui a bien marché 1", "..."],
+  "startDoing": ["À mettre en place 1", "..."],
+  "stopDoing": ["À arrêter 1", "..."],
+  "actions": [{ "action": "Action concrète", "owner": "Nom (optionnel)", "deadline": "YYYY-MM-DD (optionnel)" }],
+  "metrics": [{ "label": "Métrique", "value": "Valeur", "trend": "improving|stable|declining" }]
+}
+
+Règles :
+- 2-4 éléments par catégorie (keep/start/stop)
+- Actions concrètes et assignables
+- Métriques pertinentes ( vélocité, taux de complétion, etc.)
+- Ton constructif et bienveillant
+- Basé sur les données réelles du sprint`,
+        },
+      ]);
+
+      return parseJsonResponse<Retrospective>(resp.content);
+    } catch (err: any) {
+      setError(err.message || "Erreur de génération");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { generate, loading, error };
+}
+
+// ── Review / critique a story ──────────────────────────────────────────
+export function useReviewStory() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useCallback(async (story: Story, state: AppState): Promise<StoryReview | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const projectContext = buildProjectContext(state);
+
+      const resp = await aiApi.generate([
+        { role: "system", content: systemPrompt("Tu critiques et améliores des user stories Scrum.") },
+        {
+          role: "user",
+          content: `${projectContext}
+
+Story à reviewer :
+Titre : ${story.title}
+Description : ${story.description}
+Points : ${story.points}pts
+Priorité : ${story.priority}
+
+Analyse la qualité de cette user story et donne un retour constructif.
+Réponds avec un JSON de cette forme exacte :
+{
+  "score": 7,
+  "issues": [
+    { "severity": "critical|warning|info", "message": "Problème détecté", "suggestion": "Suggestion d'amélioration" }
+  ],
+  "improvedStory": {
+    "title": "Titre amélioré",
+    "description": "Description améliorée avec critères d'acceptation",
+    "points": 5,
+    "priority": "high"
+  }
+}
+
+Règles :
+- Score de 1 à 10 (10 = parfaite)
+- Détecte : exigences vagues, critères manquants, scope trop large, ambiguités, doublons potentiels
+- Severities : critical (bloquant), warning (à améliorer), info (suggestion)
+- La story améliorée doit respecter le format "En tant que... je veux... afin de..."
+- Sois spécifique et actionnable dans tes suggestions`,
+        },
+      ]);
+
+      return parseJsonResponse<StoryReview>(resp.content);
+    } catch (err: any) {
+      setError(err.message || "Erreur de génération");
+      return null;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  return { generate, loading, error };
+}
+
+// ── Estimate a story ───────────────────────────────────────────────────
+export function useEstimateStory() {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useCallback(async (story: Story, state: AppState): Promise<Estimation | null> => {
+    setLoading(true);
+    setError(null);
+    try {
+      const projectContext = buildProjectContext(state);
+
+      const resp = await aiApi.generate([
+        { role: "system", content: systemPrompt("Tu estimes des user stories Scrum avec justification.") },
+        {
+          role: "user",
+          content: `${projectContext}
+
+Story à estimer :
+Titre : ${story.title}
+Description : ${story.description}
+Points actuels : ${story.points}pts
+Priorité : ${story.priority}
+
+Analyse cette story et recommande un nombre de story points avec justification.
+Réponds avec un JSON de cette forme exacte :
+{
+  "recommendedPoints": 5,
+  "minPoints": 3,
+  "maxPoints": 8,
+  "reasoning": "Justification détaillée de l'estimation...",
+  "factors": [
+    { "factor": "Complexité technique", "impact": "low|medium|high" },
+    { "factor": "Dépendances", "impact": "low|medium|high" },
+    { "factor": "Risques", "impact": "low|medium|high" },
+    { "factor": "Effort de test", "impact": "low|medium|high" }
+  ]
+}
+
+Règles :
+- Utilise la séquence Fibonacci : 1, 2, 3, 5, 8, 13, 21
+- Considère : complexité technique, effort, risques, dépendances, tests
+- Le recommendedPoints doit être dans la séquence Fibonacci
+- min/max doivent encadrer recommendedPoints
+- Reasoning en français, clair et concis
+- 4 facteurs minimum`,
+        },
+      ]);
+
+      return parseJsonResponse<Estimation>(resp.content);
     } catch (err: any) {
       setError(err.message || "Erreur de génération");
       return null;

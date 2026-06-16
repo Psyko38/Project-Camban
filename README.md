@@ -12,7 +12,7 @@ Application de gestion de projet Scrum avec backend SQLite et assistant IA inté
 
 ```bash
 npm install
-npm run build
+npm run build:all
 npm start
 ```
 
@@ -28,17 +28,43 @@ npm run dev:all    # Les deux en parallèle
 
 ## Déploiement
 
-Un seul binaire Node.js suffit :
+### Alwaysdata (recommandé)
+
+1. Créer un compte sur [alwaysdata.com](https://www.alwaysdata.com/en/register/) (Free ou Plus)
+2. Uploader le projet via SFTP/FTP :
+   ```bash
+   ssh <user>@ssh-<user>.alwaysdata.net
+   cd www
+   git clone <repo> scrumflow
+   cd scrumflow
+   npm install --production
+   npm run build:all
+   ```
+3. Dans l'admin alwaysdata, créer un site Node.js :
+   - **Type** : Node.js
+   - **Commande** : `node $HOME/www/scrumflow/dist-server/server/index.js`
+   - **Version Node.js** : 20 ou 22
+   - **Hot restart** : SIGHUP
+
+### Tout serveur Node.js
 
 ```bash
 git clone <repo>
 cd camban
-npm install
-npm run build
+npm install --production
+npm run build:all
 PORT=80 npm start
 ```
 
-La base SQLite (`server/scrumflow.db`) est créée automatiquement au premier lancement.
+La base SQLite est créée automatiquement au premier lancement.
+
+## Variables d'environnement
+
+| Variable | Défaut | Description |
+|---|---|---|
+| `PORT` | `3001` | Port du serveur |
+| `JWT_SECRET` | `scrumflow-secret-change-me` | Secret JWT (à changer en prod) |
+| `DB_PATH` | `./scrumflow.db` | Chemin vers la base SQLite |
 
 ## Fonctionnalités
 
@@ -46,8 +72,9 @@ La base SQLite (`server/scrumflow.db`) est créée automatiquement au premier la
 - Kanban, backlog, sprint board
 - Auth par mot de passe (pas de comptes utilisateur)
 - Panel IA : génération de projets, stories, sprints, complétion de stories
+- Décomposition de stories, critères d'acceptation, rétrospectives, reviews, estimations
 - Config IA multi-fournisseurs (OpenAI, Groq, Ollama, etc.)
-- Toggle de raisonnement IA (off/low/medium/high)
+- Toggle de raisonnement IA (off/low/medium/high/max)
 - Import/export JSON
 
 ## Structure
@@ -67,12 +94,6 @@ La base SQLite (`server/scrumflow.db`) est créée automatiquement au premier la
 │   ├── api/              # client.ts (auth, store, AI)
 │   └── types.ts          # TypeScript types
 ├── dist/                 # Frontend buildé (single HTML file)
+├── dist-server/          # Backend compilé (JS)
 └── package.json
 ```
-
-## Variables d'environnement
-
-| Variable | Défaut | Description |
-|---|---|---|
-| `PORT` | `3001` | Port du serveur |
-| `JWT_SECRET` | `scrumflow-secret-change-me` | Secret JWT (à changer en prod) |
