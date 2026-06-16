@@ -1,4 +1,5 @@
 node_modules/
 server/scrumflow.db*
+dist-server/server/scrumflow.db*
 .env
 *.log
