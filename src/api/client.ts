@@ -1,6 +1,7 @@
 import type { AppStore } from "../types";
 
-const API_BASE = "/api";
+const basePath = window.location.pathname.replace(/\/+$/, "");
+const API_BASE = basePath ? `${basePath}/api` : "/api";
 
 let authToken: string | null = localStorage.getItem("scrumflow-token");
 

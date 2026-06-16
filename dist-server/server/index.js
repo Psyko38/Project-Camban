@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import path from "path";
@@ -10,13 +11,14 @@ import aiRoutes from "./routes/ai.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = parseInt(process.env.PORT || "3000", 10);
+const BASE_PATH = (process.env.BASE_PATH || "").replace(/\/+$/, "");
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "10mb" }));
 // Auth routes (no auth required)
-app.use("/api/auth", authRoutes);
+app.use(`${BASE_PATH}/api/auth`, authRoutes);
 // Auth middleware for all other /api routes
-app.use("/api", (req, res, next) => {
+app.use(`${BASE_PATH}/api`, (req, res, next) => {
     // Skip auth check and setup if no password is set
     if (!hasPassword()) {
         return next();
@@ -33,12 +35,12 @@ app.use("/api", (req, res, next) => {
     next();
 });
 // API routes
-app.use("/api/store", storeRoutes);
-app.use("/api/ai", aiRoutes);
+app.use(`${BASE_PATH}/api/store`, storeRoutes);
+app.use(`${BASE_PATH}/api/ai`, aiRoutes);
 // Serve frontend in production
 const distPath = path.join(__dirname, "..", "..", "dist");
-app.use(express.static(distPath));
-app.get("/{*splat}", (_req, res) => {
+app.use(`${BASE_PATH}`, express.static(distPath));
+app.get(`${BASE_PATH}/{*splat}`, (_req, res) => {
     res.sendFile(path.join(distPath, "index.html"));
 });
 // Initialize DB and start server
