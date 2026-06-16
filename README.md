@@ -5,7 +5,7 @@ Application de gestion de projet Scrum avec backend SQLite et assistant IA inté
 ## Stack
 
 - **Frontend** : React 19, Tailwind CSS 4, Vite (single-file build)
-- **Backend** : Express 5, better-sqlite3, JWT auth
+- **Backend** : Express 5, better-sqlite3, JWT auth, dotenv
 - **IA** : OpenAI-compatible (Groq, Ollama, LM Studio, Together AI, OpenRouter)
 
 ## Démarrage
@@ -22,8 +22,8 @@ Le serveur démarre sur `http://localhost:3000`.
 
 ```bash
 npm run dev        # Frontend (Vite, port 5173)
-npm run dev:server # Backend (port 3000)
-npm run dev:all    # Les deux en parallèle
+npm run dev:server # Backend (tsx, port 3000)
+npm run dev:all    # Les deux en parallèle (concurrently)
 ```
 
 ## Déploiement
@@ -31,15 +31,15 @@ npm run dev:all    # Les deux en parallèle
 ### Alwaysdata
 
 1. Créer un compte sur [alwaysdata.com](https://www.alwaysdata.com/en/register/) (plan gratuit 100 MB)
-2. Cloner le repo via SSH :
+2. Se connecter en SSH et cloner le repo :
    ```bash
    ssh <user>@ssh-<user>.alwaysdata.net
    mkdir -p ~/www/Project/Project-Camban
    cd ~/www/Project/Project-Camban
-   git clone <repo> .
+   git clone <url_du_repo> .
    npm install --production
    ```
-3. Dans l'admin alwaysdata, créer un site Node.js :
+3. Dans l'admin alwaysdata (**Web > Sites > Ajouter un site**) :
    - **Type** : Node.js
    - **Commande** : `node dist-server/server/index.js`
    - **Working directory** : `www/Project/Project-Camban`
@@ -54,6 +54,7 @@ npm run dev:all    # Les deux en parallèle
 ```bash
 ssh <user>@ssh-<user>.alwaysdata.net
 cd ~/www/Project/Project-Camban
+rm -f dist-server/server/scrumflow.db*
 git pull
 npm install --production
 ```
@@ -61,7 +62,7 @@ npm install --production
 ### Tout serveur Node.js
 
 ```bash
-git clone <repo>
+git clone <url_du_repo>
 cd Project-Camban
 npm install --production
 npm run build:all
@@ -94,7 +95,7 @@ La base SQLite est créée automatiquement au premier lancement.
 
 ```
 ├── server/
-│   ├── index.ts          # Express + routes + static serving
+│   ├── index.ts          # Express + routes + BASE_PATH + static serving
 │   ├── db.ts             # SQLite schema
 │   ├── auth.ts           # JWT + bcrypt
 │   └── routes/
@@ -102,11 +103,35 @@ La base SQLite est créée automatiquement au premier lancement.
 │       ├── store.ts      # GET/PUT /api/store
 │       └── ai.ts         # GET/PUT /api/ai/config, /models, POST /generate
 ├── src/
-│   ├── components/       # React UI
-│   ├── hooks/            # useStore, useAI, storage
-│   ├── api/              # client.ts (auth, store, AI)
-│   └── types.ts          # TypeScript types
+│   ├── main.tsx          # Point d'entrée React
+│   ├── App.tsx           # Composant principal
+│   ├── index.css         # Styles Tailwind
+│   ├── types.ts          # TypeScript types
+│   ├── data.ts           # Données par défaut
+│   ├── api/
+│   │   └── client.ts     # Client API (auth, store, AI) - auto-détection BASE_PATH
+│   ├── components/
+│   │   ├── AIPanel.tsx   # Panel d'assistant IA
+│   │   ├── Backlog.tsx   # Vue backlog
+│   │   ├── Board.tsx     # Vue kanban
+│   │   ├── Dashboard.tsx # Tableau de bord
+│   │   ├── Login.tsx     # Écran d'authentification
+│   │   ├── Members.tsx   # Gestion des membres
+│   │   ├── ProjectManager.tsx  # Gestion de projets
+│   │   ├── ProjectSwitcher.tsx # Sélecteur de projet
+│   │   ├── Sprints.tsx   # Gestion des sprints
+│   │   └── ui/           # Composants UI réutilisables
+│   ├── hooks/
+│   │   ├── useStore.ts   # Hook principal (state + API)
+│   │   ├── useAI.ts      # Hook IA
+│   │   ├── useResponsive.ts # Détection responsive
+│   │   └── storage.ts    # Persistance localStorage
+│   └── utils/
+│       └── cn.ts         # Utilitaire de classes CSS
 ├── dist/                 # Frontend buildé (single HTML file)
 ├── dist-server/          # Backend compilé (JS)
+├── .env                  # Variables d'environnement locales
+├── vite.config.ts        # Config Vite + proxy dev
+├── tsconfig.server.json  # Config TypeScript serveur
 └── package.json
 ```
