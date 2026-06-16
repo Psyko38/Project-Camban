@@ -21,10 +21,11 @@ Le serveur démarre sur `http://localhost:3000`.
 ## Développement
 
 ```bash
-npm run dev        # Frontend (Vite, port 5173)
-npm run dev:server # Backend (tsx, port 3000)
-npm run dev:all    # Les deux en parallèle (concurrently)
+npm run build:all
+npm start
 ```
+
+Le serveur tourne sur `http://localhost:3000` (API + frontend).
 
 ## Déploiement
 
