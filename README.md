@@ -16,41 +16,53 @@ npm run build:all
 npm start
 ```
 
-Le serveur démarre sur `http://localhost:3001`.
+Le serveur démarre sur `http://localhost:3000`.
 
 ## Développement
 
 ```bash
 npm run dev        # Frontend (Vite, port 5173)
-npm run dev:server # Backend (port 3001)
+npm run dev:server # Backend (port 3000)
 npm run dev:all    # Les deux en parallèle
 ```
 
 ## Déploiement
 
-### Alwaysdata (recommandé)
+### Alwaysdata
 
-1. Créer un compte sur [alwaysdata.com](https://www.alwaysdata.com/en/register/) (Free ou Plus)
-2. Uploader le projet via SFTP/FTP :
+1. Créer un compte sur [alwaysdata.com](https://www.alwaysdata.com/en/register/) (plan gratuit 100 MB)
+2. Cloner le repo via SSH :
    ```bash
    ssh <user>@ssh-<user>.alwaysdata.net
-   cd www
-   git clone <repo> scrumflow
-   cd scrumflow
+   mkdir -p ~/www/Project/Project-Camban
+   cd ~/www/Project/Project-Camban
+   git clone <repo> .
    npm install --production
-   npm run build:all
    ```
 3. Dans l'admin alwaysdata, créer un site Node.js :
    - **Type** : Node.js
-   - **Commande** : `node $HOME/www/scrumflow/dist-server/server/index.js`
-   - **Version Node.js** : 20 ou 22
+   - **Commande** : `node dist-server/server/index.js`
+   - **Working directory** : `www/Project/Project-Camban`
+   - **Node.js** : 20 ou 22
    - **Hot restart** : SIGHUP
+   - **Variable d'environnement** : `BASE_PATH=/Projet`
+
+4. L'app sera accessible sur `https://<user>.alwaysdata.net/Projet`
+
+### Mise à jour
+
+```bash
+ssh <user>@ssh-<user>.alwaysdata.net
+cd ~/www/Project/Project-Camban
+git pull
+npm install --production
+```
 
 ### Tout serveur Node.js
 
 ```bash
 git clone <repo>
-cd camban
+cd Project-Camban
 npm install --production
 npm run build:all
 PORT=80 npm start
@@ -62,7 +74,8 @@ La base SQLite est créée automatiquement au premier lancement.
 
 | Variable | Défaut | Description |
 |---|---|---|
-| `PORT` | `3001` | Port du serveur |
+| `PORT` | `3000` | Port du serveur |
+| `BASE_PATH` | *(vide)* | Préfixe de chemin (ex: `/Projet` pour alwaysdata) |
 | `JWT_SECRET` | `scrumflow-secret-change-me` | Secret JWT (à changer en prod) |
 | `DB_PATH` | `./scrumflow.db` | Chemin vers la base SQLite |
 
